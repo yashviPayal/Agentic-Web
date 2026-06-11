@@ -12,7 +12,7 @@ def extract_clean_content(
     for element in soup(["script", "style", "nav", "footer", "header", "aside", "noscript"]):
         element.decompose()
 
-    main_content = soup.find("article") or soup.find("main") or soup.find("div", class_="content")
+    main_content = soup.find("article") or soup.find("main") or soup.body
     text_source = main_content if main_content else soup
     text = text_source.get_text(separator="\n", strip=True)
     lines = [line.strip() for line in text.splitlines() if line.strip()]

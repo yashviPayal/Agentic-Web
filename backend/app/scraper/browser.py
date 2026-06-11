@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from typing import Any, Dict, Optional
 
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
@@ -6,6 +8,8 @@ from app.config import settings
 from app.scraper.page_handler import navigate, scroll_to_bottom, wait_for_selector
 from app.scraper.screenshot import capture_screenshot_base64
 from app.tools.extraction_tools import extract_clean_content
+
+logger = logging.getLogger(__name__)
 
 
 class BrowserManager:
@@ -19,7 +23,7 @@ class BrowserManager:
         if self._browser:
             if self._browser.is_connected():
                 return self._browser
-            print("Browser disconnected or crashed. Cleaning up and restarting...")
+            logger.warning("Browser disconnected or crashed. Cleaning up and restarting...")
             await self.close()
 
         if headless is None:
@@ -37,7 +41,7 @@ class BrowserManager:
             ]
 
         self._browser = await browser_type.launch(**launch_options)
-        print(f"Browser ({engine}) launched. Headless: {headless}")
+        logger.info(f"Browser ({engine}) launched. Headless: {headless}")
         return self._browser
 
     async def new_context(self, user_agent: Optional[str] = None) -> BrowserContext:
@@ -56,7 +60,7 @@ class BrowserManager:
         try:
             context = await self._browser.new_context(**context_options)
         except Exception as e:
-            print(f"Failed to create browser context: {e}. Attempting browser reconnect...")
+            logger.error(f"Failed to create browser context: {e}. Attempting browser reconnect...")
             await self.close()
             await self.start(headless=not self._headed)
             context = await self._browser.new_context(**context_options)
@@ -83,64 +87,86 @@ class BrowserManager:
         wait_for: Optional[str] = None,
         max_text_length: int = 8000,
     ) -> Dict[str, Any]:
-        """Main browsing tool. Returns clean, structured content for the AI."""
+        """Main browsing tool. Returns clean, structured content for the AI with retries on failure."""
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
 
-        context = None
-        try:
-            context = await self.new_context()
-            page = await self.new_page(context)
+        retries = 3
+        backoff_factors = [1, 2, 4]
+        last_error = None
 
-            response = await navigate(page, url)
-            await wait_for_selector(page, wait_for)
+        for attempt in range(retries + 1):
+            context = None
+            try:
+                context = await self.new_context()
+                page = await self.new_page(context)
 
-            if scroll_page:
-                await scroll_to_bottom(page)
+                response = await navigate(page, url)
+                if response is None:
+                    raise RuntimeError("Failed to load page response (navigation timed out or network error).")
 
-            title = await page.title()
-            html_content = await page.content()
+                if response.status >= 500:
+                    raise RuntimeError(f"Server returned status code {response.status}")
 
-            result: Dict[str, Any] = {
-                "url": url,
-                "title": title,
-                "status": response.status if response else None,
-                "success": True,
-            }
+                await wait_for_selector(page, wait_for)
 
-            if extract_content:
-                content, links = extract_clean_content(html_content, max_text_length=max_text_length)
-                result["content"] = content
-                result["links"] = links
+                if scroll_page:
+                    await scroll_to_bottom(page)
 
-            if take_screenshot:
-                result["screenshot"] = await capture_screenshot_base64(page)
+                title = await page.title()
+                html_content = await page.content()
 
-            return result
-        except Exception as e:
-            return {
-                "url": url,
-                "success": False,
-                "error": str(e),
-            }
-        finally:
-            if context:
-                await context.close()
+                result: Dict[str, Any] = {
+                    "url": url,
+                    "title": title,
+                    "status": response.status,
+                    "success": True,
+                }
+
+                if extract_content:
+                    content, links = extract_clean_content(html_content, max_text_length=max_text_length)
+                    result["content"] = content
+                    result["links"] = links
+
+                if take_screenshot:
+                    result["screenshot"] = await capture_screenshot_base64(page)
+
+                return result
+
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"Attempt {attempt + 1} failed browsing {url}: {e}")
+                if attempt < retries:
+                    sleep_time = backoff_factors[attempt]
+                    logger.info(f"Retrying in {sleep_time}s...")
+                    await asyncio.sleep(sleep_time)
+            finally:
+                if context:
+                    await context.close()
+
+        return {
+            "url": url,
+            "success": False,
+            "error": f"Failed after {retries + 1} attempts. Last error: {last_error}",
+        }
+
+
+
 
     async def close(self):
         if self._browser:
             try:
                 await self._browser.close()
             except Exception as exc:
-                print(f"Browser close skipped: {exc}")
+                logger.warning(f"Browser close skipped: {exc}")
             self._browser = None
         if self._playwright:
             try:
                 await self._playwright.stop()
             except Exception as exc:
-                print(f"Playwright stop skipped: {exc}")
+                logger.warning(f"Playwright stop skipped: {exc}")
             self._playwright = None
-        print("Browser closed")
+        logger.info("Browser closed")
 
 
 browser_manager = BrowserManager()
