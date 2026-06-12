@@ -15,9 +15,54 @@ class AIAgent:
         self.model = settings.openrouter_model
         self.tools = get_tool_definitions()
 
+    def _needs_browse_enforcement(self, messages: List[Dict[str, Any]]) -> bool:
+        user_query = ""
+        for msg in messages:
+            if msg.get("role") == "user":
+                user_query = msg.get("content", "").lower()
+                break
+
+        if not user_query:
+            return True
+
+        simple_qa_triggers = [
+            "what year", "when was", "who created", "who is", "who founded",
+            "who wrote", "what is the capital", "when did", "how old", "where is",
+            "what is the definition", "define "
+        ]
+        has_simple_qa_trigger = any(trigger in user_query for trigger in simple_qa_triggers)
+
+        browse_keywords = [
+            "scrape", "browse", "extract", "visit", "go to", "url", "link", ".com", ".org", ".net", ".io", "http",
+            "repositories", "projects", "pricing", "list of", "compare", "features", "details", "full text", "articles", "github"
+        ]
+        has_browse_keyword = any(kw in user_query for kw in browse_keywords)
+
+        if has_simple_qa_trigger and not has_browse_keyword:
+            return False
+
+        return True
+
+    def _is_greeting(self, messages: List[Dict[str, Any]]) -> bool:
+        user_query = ""
+        for msg in messages:
+            if msg.get("role") == "user":
+                user_query = msg.get("content", "").strip().lower()
+                break
+        if not user_query:
+            return True
+        greetings = {"hi", "hello", "hey", "hola", "yo", "greetings", "good morning", "good afternoon", "good evening"}
+        return user_query in greetings
+
     async def chat(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Main chat loop. Handles tool calling automatically."""
+        user_query = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+        print(f"\n==================================================")
+        print(f"🤖 AGENT CHAT SESSION STARTED")
+        print(f"👉 User Query: {user_query}")
+        print(f"==================================================\n")
         logger.info(f"Starting chat session with {len(messages)} input messages")
+        
         client = get_openai_client()
         full_messages: List[Dict[str, Any]] = [
             {"role": "system", "content": WEB_AGENT_SYSTEM_PROMPT},
@@ -57,6 +102,7 @@ class AIAgent:
         while step < max_steps:
             step += 1
             logger.info(f"Agent step {step}/{max_steps} - Requesting LLM completion")
+            print(f"⏳ [AGENT STEP {step}/{max_steps}] Requesting LLM completion...")
             response = await client.chat.completions.create(
                 model=self.model,
                 messages=full_messages,
@@ -66,11 +112,34 @@ class AIAgent:
             )
 
             message = response.choices[0].message
+            if message.content:
+                print(f"\n🧠 [AGENT REASONING / PLAN] (Step {step})")
+                print(f"--------------------------------------------------")
+                print(message.content.strip())
+                print(f"--------------------------------------------------\n")
 
             if not message.tool_calls:
-                # Check if search was called but browse did not succeed
-                if search_web_called and not browse_web_succeeded and step < max_steps:
+                # 1. Check if the agent is trying to answer without calling any tools at all (unless it's a simple greeting)
+                if not search_web_called and not browse_web_succeeded and not self._is_greeting(messages) and step < max_steps:
+                    logger.warning("Agent tried to answer without using any tools. Forcing tool call.")
+                    print(f"⚠️  [GUARDRAIL WARNING] Agent attempted to answer directly without tools. Injecting correction system message...")
+                    warning_msg = {
+                        "role": "system",
+                        "content": (
+                            "Correction: You have attempted to answer using your pre-training/internal knowledge without executing any tool. "
+                            "As a Web AI Agent, you are NOT allowed to answer from internal knowledge. You MUST use search_web "
+                            "or browse_web to gather real-time data first. "
+                            "Please execute your plan by calling the appropriate tool now."
+                        )
+                    }
+                    full_messages.append(warning_msg)
+                    new_messages.append(warning_msg)
+                    continue
+
+                # 2. Check if search was called but browse did not succeed
+                if self._needs_browse_enforcement(messages) and search_web_called and not browse_web_succeeded and step < max_steps:
                     logger.warning("Agent tried to answer without a successful browse_web. Forcing browse_web.")
+                    print(f"⚠️  [GUARDRAIL WARNING] Agent searched but tried to answer without successful browse. Injecting browse warning...")
                     warning_msg = {
                         "role": "system",
                         "content": (
@@ -81,11 +150,31 @@ class AIAgent:
                         )
                     }
                     full_messages.append(warning_msg)
+                    new_messages.append(warning_msg)
                     # Do not let step count hit max immediately, allow the agent to continue
                     continue
 
                 final_content = message.content or ""
+                if not final_content.strip():
+                    logger.warning("Agent returned an empty text response with no tool calls. Injecting recovery prompt.")
+                    print("⚠️  [GUARDRAIL WARNING] Agent returned an empty text response. Injecting recovery prompt...")
+                    recovery_msg = {
+                        "role": "system",
+                        "content": (
+                            "Correction: Your previous response was empty. You must either continue the task by calling "
+                            "tools, or if you have all the information, output the final factual answer with source URLs. "
+                            "Do not leave the response blank."
+                        )
+                    }
+                    full_messages.append(recovery_msg)
+                    new_messages.append(recovery_msg)
+                    continue
+
                 logger.info(f"LLM decided to respond directly without tool calls. Content length: {len(final_content)}")
+                print(f"\n==================================================")
+                print(f"✅ AGENT TASK COMPLETED SUCCESSFULLY")
+                print(f"🏁 Final Response:\n{final_content}")
+                print(f"==================================================\n")
                 assistant_final_msg = {
                     "role": "assistant",
                     "content": final_content,
@@ -101,6 +190,7 @@ class AIAgent:
                 }
 
             logger.info(f"LLM requested {len(message.tool_calls)} tool call(s) at step {step}")
+            print(f"🛠️  [TOOL CALL REQUEST] LLM requested {len(message.tool_calls)} tool call(s) at step {step}")
             assistant_msg = {
                 "role": "assistant",
                 "content": message.content,
@@ -114,9 +204,19 @@ class AIAgent:
                 tool_name = tool_call.function.name
                 tool_args = json.loads(tool_call.function.arguments)
 
-                logger.info(f"Executing tool '{tool_name}' with args: {tool_args}")
+                # Truncate args for cleaner print
+                logged_args = {}
+                for k, v in tool_args.items():
+                    if isinstance(v, str) and len(v) > 200:
+                        logged_args[k] = v[:200] + f"... [Truncated, total {len(v)} characters]"
+                    else:
+                        logged_args[k] = v
+
+                print(f"👉 [EXECUTING TOOL] {tool_name} with args: {logged_args}")
+                logger.info(f"Executing tool '{tool_name}' with args: {logged_args}")
                 tool_result = await execute_tool(tool_name, tool_args)
                 is_success = tool_result.get("success", False) if isinstance(tool_result, dict) else True
+                print(f"🏁 [TOOL COMPLETED] {tool_name}. Success: {is_success}")
                 logger.info(f"Tool '{tool_name}' execution completed. Success: {is_success}")
 
                 if tool_name == "search_web":

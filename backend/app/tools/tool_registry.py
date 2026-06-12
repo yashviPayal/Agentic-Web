@@ -1,8 +1,11 @@
+import asyncio
+import inspect
 import logging
 from typing import Any, Awaitable, Callable, Dict, List
 
 from app.tools.browser_tools import browse_web
 from app.tools.search_tools import search_web
+from app.tools.extraction_tools import extract_data
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +67,34 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
                     "required": ["query"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "extract_data",
+                "description": (
+                    "Extract specific data fields from a webpage's raw HTML or content. "
+                    "Use this tool when you need structured fields like price, description, "
+                    "date, or specific values from a webpage."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "page_content": {
+                            "type": "string",
+                            "description": "The raw HTML or text content of the page to extract from",
+                        },
+                        "fields": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "description": "The list of field names/descriptions to extract (e.g. ['price', 'product name'])",
+                        },
+                    },
+                    "required": ["page_content", "fields"],
+                },
+            },
         }
     ]
 
@@ -71,12 +102,21 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
 TOOL_REGISTRY: Dict[str, ToolHandler] = {
     "browse_web": browse_web,
     "search_web": search_web,
+    "extract_data": extract_data,
 }
 
 
 async def execute_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-    print(f"\n>>> [AI TOOL EXECUTION] Tool: '{name}' | Args: {arguments}")
-    logger.info(f"Executing tool {name} with arguments {arguments}")
+    # Truncate large string values in arguments for cleaner logging
+    logged_args = {}
+    for k, v in arguments.items():
+        if isinstance(v, str) and len(v) > 200:
+            logged_args[k] = v[:200] + f"... [Truncated, total {len(v)} characters]"
+        else:
+            logged_args[k] = v
+
+    print(f"\n>>> [AI TOOL EXECUTION] Tool: '{name}' | Args: {logged_args}")
+    logger.info(f"Executing tool {name} with arguments {logged_args}")
     try:
         handler = TOOL_REGISTRY[name]
     except KeyError as exc:
@@ -84,12 +124,31 @@ async def execute_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         logger.error(f"Unknown tool: {name}")
         raise ValueError(f"Unknown tool: {name}") from exc
 
+    # Filter arguments to match the handler's signature to prevent TypeError: unexpected keyword argument
     try:
-        result = await handler(**arguments)
-        print(f"<<< [AI TOOL COMPLETED] Tool: '{name}' | Success\n")
-        logger.info(f"Tool {name} completed successfully")
-        return result
+        sig = inspect.signature(handler)
+        has_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+        if not has_kwargs:
+            valid_args = {k: v for k, v in arguments.items() if k in sig.parameters}
+        else:
+            valid_args = arguments
     except Exception as e:
-        print(f"!!! [AI TOOL ERROR] Tool: '{name}' failed: {e}\n")
-        logger.error(f"Tool {name} failed: {e}")
-        return {"success": False, "error": str(e)}
+        logger.warning(f"Failed to inspect signature of tool {name}: {e}")
+        valid_args = arguments
+
+    retries = 3
+    for attempt in range(1, retries + 1):
+        try:
+            result = await handler(**valid_args)
+            print(f"<<< [AI TOOL COMPLETED] Tool: '{name}' | Success\n")
+            logger.info(f"Tool {name} completed successfully")
+            return result
+        except Exception as e:
+            print(f"!!! [AI TOOL ERROR] Tool: '{name}' attempt {attempt} failed: {e}")
+            logger.warning(f"Tool {name} attempt {attempt} failed: {e}")
+            if attempt < retries:
+                await asyncio.sleep(1.0)
+            else:
+                print(f"!!! [AI TOOL ERROR] Tool: '{name}' failed after {retries} attempts: {e}\n")
+                logger.error(f"Tool {name} failed after {retries} attempts: {e}")
+                return {"success": False, "error": str(e)}
