@@ -13,7 +13,7 @@ async def health():
     return {"status": "ok"}
 
 
-@router.post("/chat/", response_model=ChatResponse, tags=["chat"])
+@router.post("/chat", response_model=ChatResponse, tags=["chat"])
 async def chat(request: ChatRequest):
     """Chat with the AI agent. It may use browse_web tool automatically."""
     result = await agent_service.chat(request.messages)

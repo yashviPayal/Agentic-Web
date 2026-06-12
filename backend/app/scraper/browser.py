@@ -17,33 +17,54 @@ class BrowserManager:
         self._playwright = None
         self._browser: Optional[Browser] = None
         self._headed: bool = False
+        self._lock = asyncio.Lock()
+
+    async def _close_internal(self):
+        if not self._browser and not self._playwright:
+            logger.info("Browser is already closed or not initialized.")
+            return
+
+        if self._browser:
+            try:
+                await self._browser.close()
+            except Exception as exc:
+                logger.warning(f"Browser close skipped: {exc}")
+            self._browser = None
+        if self._playwright:
+            try:
+                await self._playwright.stop()
+            except Exception as exc:
+                logger.warning(f"Playwright stop skipped: {exc}")
+            self._playwright = None
+        logger.info("Browser closed")
 
     async def start(self, engine: str = "chromium", headless: Optional[bool] = None):
         """Launch browser. headless=False shows the actual browser window."""
-        if self._browser:
-            if self._browser.is_connected():
-                return self._browser
-            logger.warning("Browser disconnected or crashed. Cleaning up and restarting...")
-            await self.close()
+        async with self._lock:
+            if self._browser:
+                if self._browser.is_connected():
+                    return self._browser
+                logger.warning("Browser disconnected or crashed. Cleaning up and restarting...")
+                await self._close_internal()
 
-        if headless is None:
-            headless = not settings.playwright_headed
+            if headless is None:
+                headless = not settings.playwright_headed
 
-        self._headed = not headless
-        self._playwright = await async_playwright().start()
-        browser_type = getattr(self._playwright, engine)
+            self._headed = not headless
+            self._playwright = await async_playwright().start()
+            browser_type = getattr(self._playwright, engine)
 
-        launch_options: Dict[str, Any] = {"headless": headless}
-        if not headless:
-            launch_options["slow_mo"] = 500
-            launch_options["args"] = [
-                "--start-maximized",
-                "--disable-blink-features=AutomationControlled",
-            ]
+            launch_options: Dict[str, Any] = {"headless": headless}
+            if not headless:
+                launch_options["slow_mo"] = 500
+                launch_options["args"] = [
+                    "--start-maximized",
+                    "--disable-blink-features=AutomationControlled",
+                ]
 
-        self._browser = await browser_type.launch(**launch_options)
-        logger.info(f"Browser ({engine}) launched. Headless: {headless}")
-        return self._browser
+            self._browser = await browser_type.launch(**launch_options)
+            logger.info(f"Browser ({engine}) launched. Headless: {headless}")
+            return self._browser
 
     async def new_context(self, user_agent: Optional[str] = None) -> BrowserContext:
         """Create isolated browser context with anti-bot measures."""
@@ -159,19 +180,8 @@ class BrowserManager:
 
 
     async def close(self):
-        if self._browser:
-            try:
-                await self._browser.close()
-            except Exception as exc:
-                logger.warning(f"Browser close skipped: {exc}")
-            self._browser = None
-        if self._playwright:
-            try:
-                await self._playwright.stop()
-            except Exception as exc:
-                logger.warning(f"Playwright stop skipped: {exc}")
-            self._playwright = None
-        logger.info("Browser closed")
+        async with self._lock:
+            await self._close_internal()
 
 
 browser_manager = BrowserManager()

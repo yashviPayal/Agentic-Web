@@ -34,23 +34,25 @@ class AIAgent:
 
         # Track tool calls to enforce search-to-browse
         search_web_called = False
-        browse_web_called = False
+        browse_web_succeeded = False
 
         # Scan initial history to set tracking flags
         for msg in full_messages:
             if msg.get("role") == "tool":
                 name = msg.get("name")
+                content_str = msg.get("content", "")
+                is_success = True
+                try:
+                    res_json = json.loads(content_str)
+                    if isinstance(res_json, dict) and "success" in res_json:
+                        is_success = res_json["success"]
+                except Exception:
+                    pass
+
                 if name == "search_web":
                     search_web_called = True
-                elif name == "browse_web":
-                    browse_web_called = True
-            elif msg.get("role") == "assistant" and "tool_calls" in msg and msg["tool_calls"]:
-                for tc in msg["tool_calls"]:
-                    name = tc.get("function", {}).get("name")
-                    if name == "search_web":
-                        search_web_called = True
-                    elif name == "browse_web":
-                        browse_web_called = True
+                elif name == "browse_web" and is_success:
+                    browse_web_succeeded = True
 
         while step < max_steps:
             step += 1
@@ -66,13 +68,13 @@ class AIAgent:
             message = response.choices[0].message
 
             if not message.tool_calls:
-                # Check if search was called but browse was not
-                if search_web_called and not browse_web_called and step < max_steps:
-                    logger.warning("Agent tried to answer from search_web only. Forcing browse_web.")
+                # Check if search was called but browse did not succeed
+                if search_web_called and not browse_web_succeeded and step < max_steps:
+                    logger.warning("Agent tried to answer without a successful browse_web. Forcing browse_web.")
                     warning_msg = {
                         "role": "system",
                         "content": (
-                            "Correction: You have only searched the web but have not browsed the actual "
+                            "Correction: You have only searched the web or had failed browse attempts, but have not successfully browsed and read the actual "
                             "webpages. Snippets from search_web are incomplete and not acceptable as a final answer. "
                             "You MUST call browse_web on the relevant URL discovered to read the full page details "
                             "before writing your final response."
@@ -107,23 +109,25 @@ class AIAgent:
 
             tool_msgs = []
 
+            tools_in_step = []
             for tool_call in message.tool_calls:
                 tool_name = tool_call.function.name
                 tool_args = json.loads(tool_call.function.arguments)
-
-                if tool_name == "search_web":
-                    search_web_called = True
-                elif tool_name == "browse_web":
-                    browse_web_called = True
 
                 logger.info(f"Executing tool '{tool_name}' with args: {tool_args}")
                 tool_result = await execute_tool(tool_name, tool_args)
                 is_success = tool_result.get("success", False) if isinstance(tool_result, dict) else True
                 logger.info(f"Tool '{tool_name}' execution completed. Success: {is_success}")
 
-                last_tool_used = tool_name
+                if tool_name == "search_web":
+                    search_web_called = True
+                elif tool_name == "browse_web" and is_success:
+                    browse_web_succeeded = True
+
+                tools_in_step.append(tool_name)
+                last_tool_used = ", ".join(tools_in_step)
                 last_tool_result = tool_result
-                last_raw_url = tool_args.get("url") if isinstance(tool_args, dict) else None
+                last_raw_url = tool_args.get("url") if isinstance(tool_args, dict) else last_raw_url
 
                 assistant_msg["tool_calls"].append({
                     "id": tool_call.id,

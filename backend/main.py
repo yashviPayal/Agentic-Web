@@ -12,6 +12,12 @@ from app.api.routes import router as api_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Validate settings
+    from app.config import settings
+    if not settings.openrouter_api_key:
+        raise ValueError(
+            "OPENROUTER_API_KEY is not configured. Please set it in your environment or backend/.env file."
+        )
     # Startup: Launch browser using the settings/env configuration
     await browser_manager.start()
     yield

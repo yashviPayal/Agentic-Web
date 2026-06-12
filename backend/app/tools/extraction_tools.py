@@ -7,7 +7,10 @@ def extract_clean_content(
     html_content: str,
     max_text_length: int = 8000,
 ) -> Tuple[str, List[Dict[str, Any]]]:
-    soup = BeautifulSoup(html_content, "lxml")
+    try:
+        soup = BeautifulSoup(html_content, "lxml")
+    except Exception:
+        soup = BeautifulSoup(html_content, "html.parser")
 
     for element in soup(["script", "style", "nav", "footer", "header", "aside", "noscript"]):
         element.decompose()
