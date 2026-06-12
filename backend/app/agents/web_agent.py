@@ -25,12 +25,32 @@ class AIAgent:
         ]
 
         new_messages = []
-        max_steps = 10
+        max_steps = 20
         step = 0
 
         last_tool_used = None
         last_tool_result = None
         last_raw_url = None
+
+        # Track tool calls to enforce search-to-browse
+        search_web_called = False
+        browse_web_called = False
+
+        # Scan initial history to set tracking flags
+        for msg in full_messages:
+            if msg.get("role") == "tool":
+                name = msg.get("name")
+                if name == "search_web":
+                    search_web_called = True
+                elif name == "browse_web":
+                    browse_web_called = True
+            elif msg.get("role") == "assistant" and "tool_calls" in msg and msg["tool_calls"]:
+                for tc in msg["tool_calls"]:
+                    name = tc.get("function", {}).get("name")
+                    if name == "search_web":
+                        search_web_called = True
+                    elif name == "browse_web":
+                        browse_web_called = True
 
         while step < max_steps:
             step += 1
@@ -40,11 +60,28 @@ class AIAgent:
                 messages=full_messages,
                 tools=self.tools,
                 tool_choice="auto" if step < max_steps else "none",
+                max_tokens=4000,
             )
 
             message = response.choices[0].message
 
             if not message.tool_calls:
+                # Check if search was called but browse was not
+                if search_web_called and not browse_web_called and step < max_steps:
+                    logger.warning("Agent tried to answer from search_web only. Forcing browse_web.")
+                    warning_msg = {
+                        "role": "system",
+                        "content": (
+                            "Correction: You have only searched the web but have not browsed the actual "
+                            "webpages. Snippets from search_web are incomplete and not acceptable as a final answer. "
+                            "You MUST call browse_web on the relevant URL discovered to read the full page details "
+                            "before writing your final response."
+                        )
+                    }
+                    full_messages.append(warning_msg)
+                    # Do not let step count hit max immediately, allow the agent to continue
+                    continue
+
                 final_content = message.content or ""
                 logger.info(f"LLM decided to respond directly without tool calls. Content length: {len(final_content)}")
                 assistant_final_msg = {
@@ -73,6 +110,11 @@ class AIAgent:
             for tool_call in message.tool_calls:
                 tool_name = tool_call.function.name
                 tool_args = json.loads(tool_call.function.arguments)
+
+                if tool_name == "search_web":
+                    search_web_called = True
+                elif tool_name == "browse_web":
+                    browse_web_called = True
 
                 logger.info(f"Executing tool '{tool_name}' with args: {tool_args}")
                 tool_result = await execute_tool(tool_name, tool_args)

@@ -92,4 +92,4 @@ async def execute_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         print(f"!!! [AI TOOL ERROR] Tool: '{name}' failed: {e}\n")
         logger.error(f"Tool {name} failed: {e}")
-        raise
+        return {"success": False, "error": str(e)}
