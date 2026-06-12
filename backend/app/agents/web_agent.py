@@ -85,6 +85,7 @@ class AIAgent:
         # Track tool calls to enforce search-to-browse and stateful depth limit
         search_web_called = False
         browse_web_succeeded = False
+        extract_data_called = False
         state = AgentState(navigation_depth=0)
 
         # Scan initial history to set tracking flags
@@ -104,6 +105,8 @@ class AIAgent:
                     search_web_called = True
                 elif name == "browse_web" and is_success:
                     browse_web_succeeded = True
+                elif name == "extract_data" and is_success:
+                    extract_data_called = True
                 elif name == "navigate_page":
                     state["navigation_depth"] += 1
 
@@ -163,6 +166,22 @@ class AIAgent:
                     full_messages.append(warning_msg)
                     new_messages.append(warning_msg)
                     # Do not let step count hit max immediately, allow the agent to continue
+                    continue
+
+                # 3. Check if extract_data was not called but we have browsed a page successfully
+                if not extract_data_called and browse_web_succeeded and not self._is_greeting(messages) and step < max_steps:
+                    logger.warning("Agent tried to answer without calling extract_data. Forcing extract_data.")
+                    print(f"⚠️  [GUARDRAIL WARNING] Agent tried to finish without calling extract_data. Injecting extract_data warning...")
+                    warning_msg = {
+                        "role": "system",
+                        "content": (
+                            "Correction: You have browsed a webpage but have not executed extract_data to extract the structured information yet. "
+                            "You must call extract_data(page_content, fields) to pull the specific facts, specs, or details requested before formulating a final answer. "
+                            "Please execute the extract_data tool now."
+                        )
+                    }
+                    full_messages.append(warning_msg)
+                    new_messages.append(warning_msg)
                     continue
 
                 final_content = message.content or ""
@@ -234,6 +253,8 @@ class AIAgent:
                     search_web_called = True
                 elif tool_name == "browse_web" and is_success:
                     browse_web_succeeded = True
+                elif tool_name == "extract_data" and is_success:
+                    extract_data_called = True
                 elif tool_name == "navigate_page" and is_success:
                     state["navigation_depth"] += 1
 

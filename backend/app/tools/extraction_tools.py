@@ -43,7 +43,7 @@ def extract_clean_content(
         if item["url"] not in seen_nav:
             seen_nav.add(item["url"])
             unique_navigation_links.append(item)
-            if len(unique_navigation_links) >= 30:
+            if len(unique_navigation_links) >= 50:
                 break
 
     # 2. Decompose only non-visible / noise elements. Do NOT decompose nav, header, aside elements
@@ -88,7 +88,7 @@ def extract_clean_content(
         if item["url"] not in seen_regular:
             seen_regular.add(item["url"])
             unique_links.append(item)
-            if len(unique_links) >= 20:
+            if len(unique_links) >= 150:
                 break
 
     return text, unique_links, unique_navigation_links
@@ -174,6 +174,7 @@ async def llm_extract(chunks: List[str], fields: List[str]) -> Dict[str, Any]:
                 {"role": "user", "content": user_prompt}
             ],
             temperature=0.0,
+            max_tokens=2000,
             response_format={"type": "json_object"}
         )
         content = response.choices[0].message.content.strip()
