@@ -56,8 +56,27 @@ class AIAgent:
                 break
         if not user_query:
             return True
-        greetings = {"hi", "hello", "hey", "hola", "yo", "greetings", "good morning", "good afternoon", "good evening"}
-        return user_query in greetings
+        
+        import re
+        clean_query = re.sub(r'[^\w\s]', '', user_query).strip()
+        
+        # Define conversational/greeting words/phrases
+        greeting_words = {"hi", "hello", "hey", "hola", "yo", "greetings", "good morning", "good afternoon", "good evening", "howdy"}
+        about_ai_phrases = {"who are you", "what is your name", "how are you", "what can you do", "introduce yourself", "tell me about yourself"}
+        
+        # Direct phrase match
+        if any(phrase in clean_query for phrase in about_ai_phrases):
+            return True
+            
+        # Check if the query is a greeting or contains greeting words
+        words = clean_query.split()
+        if any(w in greeting_words for w in words):
+            # If it contains a greeting, let's make sure it doesn't also look like a web request
+            web_indicators = {"scrape", "browse", "visit", "go to", "url", "link", "http", "search", "website"}
+            if not any(indicator in clean_query for indicator in web_indicators):
+                return True
+                
+        return False
 
     async def chat(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Main chat loop. Handles tool calling automatically."""
@@ -132,92 +151,118 @@ class AIAgent:
                 print(message.content.strip())
                 print(f"--------------------------------------------------\n")
 
-            if not message.tool_calls:
+            is_attempting_to_finish = (not message.tool_calls) or any(tc.function.name == "finish_task" for tc in message.tool_calls)
+
+            if is_attempting_to_finish:
+                # Construct assistant message structure to append to history
+                assistant_msg = {
+                    "role": "assistant",
+                    "content": message.content or ""
+                }
+                if message.tool_calls:
+                    assistant_msg["tool_calls"] = [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            }
+                        }
+                        for tc in message.tool_calls
+                    ]
+
                 # 1. Check if the agent is trying to answer without calling any tools at all (unless it's a simple greeting)
                 if not search_web_called and not browse_web_succeeded and not self._is_greeting(messages) and step < max_steps:
-                    logger.warning("Agent tried to answer without using any tools. Forcing tool call.")
-                    print(f"⚠️  [GUARDRAIL WARNING] Agent attempted to answer directly without tools. Injecting correction system message...")
+                    logger.warning("Agent tried to finish without using any web tools. Forcing tool call.")
+                    print(f"⚠️  [GUARDRAIL WARNING] Agent attempted to finish directly without tools. Injecting correction system message...")
                     warning_msg = {
-                        "role": "system",
+                        "role": "user",
                         "content": (
-                            "Correction: You have attempted to answer using your pre-training/internal knowledge without executing any tool. "
+                            "[SYSTEM CORRECTION] You have attempted to finish or answer using your pre-training/internal knowledge without executing any tool. "
                             "As a Web AI Agent, you are NOT allowed to answer from internal knowledge. You MUST use search_web "
                             "or browse_web to gather real-time data first. "
                             "Please execute your plan by calling the appropriate tool now."
                         )
                     }
+                    full_messages.append(assistant_msg)
+                    new_messages.append(assistant_msg)
                     full_messages.append(warning_msg)
                     new_messages.append(warning_msg)
                     continue
 
                 # 2. Check if search was called but browse did not succeed
                 if self._needs_browse_enforcement(messages) and search_web_called and not browse_web_succeeded and step < max_steps:
-                    logger.warning("Agent tried to answer without a successful browse_web. Forcing browse_web.")
-                    print(f"⚠️  [GUARDRAIL WARNING] Agent searched but tried to answer without successful browse. Injecting browse warning...")
+                    logger.warning("Agent tried to finish without a successful browse_web. Forcing browse_web.")
+                    print(f"⚠️  [GUARDRAIL WARNING] Agent searched but tried to finish without successful browse. Injecting browse warning...")
                     warning_msg = {
-                        "role": "system",
+                        "role": "user",
                         "content": (
-                            "Correction: You have only searched the web or had failed browse attempts, but have not successfully browsed and read the actual "
+                            "[SYSTEM CORRECTION] You have only searched the web or had failed browse attempts, but have not successfully browsed and read the actual "
                             "webpages. Snippets from search_web are incomplete and not acceptable as a final answer. "
                             "You MUST call browse_web on the relevant URL discovered to read the full page details "
                             "before writing your final response."
                         )
                     }
+                    full_messages.append(assistant_msg)
+                    new_messages.append(assistant_msg)
                     full_messages.append(warning_msg)
                     new_messages.append(warning_msg)
-                    # Do not let step count hit max immediately, allow the agent to continue
                     continue
 
                 # 3. Check if extract_data was not called but we have browsed a page successfully
                 if not extract_data_called and browse_web_succeeded and not self._is_greeting(messages) and step < max_steps:
-                    logger.warning("Agent tried to answer without calling extract_data. Forcing extract_data.")
+                    logger.warning("Agent tried to finish without calling extract_data. Forcing extract_data.")
                     print(f"⚠️  [GUARDRAIL WARNING] Agent tried to finish without calling extract_data. Injecting extract_data warning...")
                     warning_msg = {
-                        "role": "system",
+                        "role": "user",
                         "content": (
-                            "Correction: You have browsed a webpage but have not executed extract_data to extract the structured information yet. "
+                            "[SYSTEM CORRECTION] You have browsed a webpage but have not executed extract_data to extract the structured information yet. "
                             "You must call extract_data(page_content, fields) to pull the specific facts, specs, or details requested before formulating a final answer. "
                             "Please execute the extract_data tool now."
                         )
                     }
+                    full_messages.append(assistant_msg)
+                    new_messages.append(assistant_msg)
                     full_messages.append(warning_msg)
                     new_messages.append(warning_msg)
                     continue
 
-                final_content = message.content or ""
-                if not final_content.strip():
-                    logger.warning("Agent returned an empty text response with no tool calls. Injecting recovery prompt.")
-                    print("⚠️  [GUARDRAIL WARNING] Agent returned an empty text response. Injecting recovery prompt...")
-                    recovery_msg = {
-                        "role": "system",
+                # 4. If there are no tool calls, handle plain text responses (reasoning messages)
+                if not message.tool_calls:
+                    final_content = message.content or ""
+                    if not final_content.strip():
+                        logger.warning("Agent returned an empty response. Injecting recovery prompt.")
+                        print("⚠️  [GUARDRAIL WARNING] Agent returned an empty response. Injecting recovery prompt...")
+                        recovery_msg = {
+                            "role": "user",
+                            "content": (
+                                "[SYSTEM CORRECTION] Your previous response was empty. You must either continue the task by calling "
+                                "tools, or if you have all the information, output the final factual answer using finish_task(answer). "
+                                "Do not leave the response blank."
+                            )
+                        }
+                        full_messages.append(assistant_msg)
+                        new_messages.append(assistant_msg)
+                        full_messages.append(recovery_msg)
+                        new_messages.append(recovery_msg)
+                        continue
+
+                    logger.info("Agent provided mid-task reasoning without tool calls. Nudging agent to continue.")
+                    print("💬 [AGENT STATE] Mid-task reasoning or planning emitted without a tool call. Injecting nudge...")
+                    
+                    nudge_msg = {
+                        "role": "user",
                         "content": (
-                            "Correction: Your previous response was empty. You must either continue the task by calling "
-                            "tools, or if you have all the information, output the final factual answer with source URLs. "
-                            "Do not leave the response blank."
+                            "[SYSTEM NOTICE] You did not call a tool. If the task is complete, you MUST call finish_task(answer) to end. "
+                            "Otherwise, continue with the next tool call (such as search_web, browse_web, navigate_page, or extract_data)."
                         )
                     }
-                    full_messages.append(recovery_msg)
-                    new_messages.append(recovery_msg)
+                    full_messages.append(assistant_msg)
+                    full_messages.append(nudge_msg)
+                    new_messages.append(assistant_msg)
+                    new_messages.append(nudge_msg)
                     continue
-
-                logger.info(f"LLM decided to respond directly without tool calls. Content length: {len(final_content)}")
-                print(f"\n==================================================")
-                print(f"✅ AGENT TASK COMPLETED SUCCESSFULLY")
-                print(f"🏁 Final Response:\n{final_content}")
-                print(f"==================================================\n")
-                assistant_final_msg = {
-                    "role": "assistant",
-                    "content": final_content,
-                }
-                new_messages.append(assistant_final_msg)
-
-                return {
-                    "response": final_content,
-                    "tool_used": last_tool_used,
-                    "tool_result": last_tool_result,
-                    "raw_url": last_raw_url,
-                    "new_messages": new_messages,
-                }
 
             logger.info(f"LLM requested {len(message.tool_calls)} tool call(s) at step {step}")
             print(f"🛠️  [TOOL CALL REQUEST] LLM requested {len(message.tool_calls)} tool call(s) at step {step}")
@@ -230,6 +275,9 @@ class AIAgent:
             tool_msgs = []
 
             tools_in_step = []
+            finished = False
+            final_answer = ""
+
             for tool_call in message.tool_calls:
                 tool_name = tool_call.function.name
                 tool_args = json.loads(tool_call.function.arguments)
@@ -257,6 +305,9 @@ class AIAgent:
                     extract_data_called = True
                 elif tool_name == "navigate_page" and is_success:
                     state["navigation_depth"] += 1
+                elif tool_name == "finish_task" and is_success:
+                    finished = True
+                    final_answer = tool_args.get("answer", "") or tool_result.get("answer", "")
 
                 tools_in_step.append(tool_name)
                 last_tool_used = ", ".join(tools_in_step)
@@ -285,6 +336,19 @@ class AIAgent:
             for tool_msg in tool_msgs:
                 new_messages.append(tool_msg)
                 full_messages.append(tool_msg)
+
+            if finished:
+                print(f"\n==================================================")
+                print(f"✅ AGENT TASK COMPLETED SUCCESSFULLY via finish_task")
+                print(f"🏁 Final Response:\n{final_answer}")
+                print(f"==================================================\n")
+                return {
+                    "response": final_answer,
+                    "tool_used": last_tool_used,
+                    "tool_result": last_tool_result,
+                    "raw_url": last_raw_url,
+                    "new_messages": new_messages,
+                }
 
         logger.warning(f"Exceeded maximum agent steps ({max_steps}). Returning fallback message.")
         fallback_content = "I have reached the maximum number of browsing steps to complete this request."

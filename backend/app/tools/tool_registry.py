@@ -7,6 +7,7 @@ from app.tools.browser_tools import browse_web
 from app.tools.search_tools import search_web
 from app.tools.extraction_tools import extract_data
 from app.tools.navigation_tools import navigate_page
+from app.tools.finish_tool import finish_task
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,28 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
                     "required": ["intent"],
                 },
             },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "finish_task",
+                "description": (
+                    "Submit the final answer and terminate the task. "
+                    "Use this ONLY when you have gathered all necessary information and are ready "
+                    "to provide the final complete answer to the user. "
+                    "You must NOT produce a final answer as plain text without calling this tool."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "answer": {
+                            "type": "string",
+                            "description": "The final complete and detailed answer to the user's query, including source URLs.",
+                        },
+                    },
+                    "required": ["answer"],
+                },
+            },
         }
     ]
 
@@ -126,6 +149,7 @@ TOOL_REGISTRY: Dict[str, ToolHandler] = {
     "search_web": search_web,
     "extract_data": extract_data,
     "navigate_page": navigate_page,
+    "finish_task": finish_task,
 }
 
 
