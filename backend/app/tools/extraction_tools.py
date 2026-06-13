@@ -50,19 +50,6 @@ def extract_clean_content(
     for element in soup(["script", "style", "noscript"]):
         element.decompose()
 
-    # Get body text
-    main_content = soup.find("article") or soup.find("main") or soup.body
-    text_source = main_content if main_content else soup
-    text = text_source.get_text(separator="\n", strip=True)
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    text = "\n".join(lines)
-
-    # 3. Navigation links are not prepended to save budget; they are returned in separate structured data.
-
-    original_length = len(text)
-    if original_length > max_text_length:
-        text = text[:max_text_length] + f"\n\n[Content truncated. Total length: {original_length} characters]"
-
     # Extract all regular links from the page
     links = []
     for anchor in soup.find_all("a", href=True):
@@ -84,6 +71,31 @@ def extract_clean_content(
             unique_links.append(item)
             if len(unique_links) >= 150:
                 break
+
+    # Convert all <a> tags to markdown links in the soup so get_text preserves URLs inline
+    for anchor in soup.find_all("a", href=True):
+        href = anchor["href"].strip()
+        anchor_text = anchor.get_text(strip=True)
+        if href and not href.startswith(("javascript:", "mailto:", "tel:")):
+            if base_url:
+                absolute_url = urllib.parse.urljoin(base_url, href)
+            else:
+                absolute_url = href
+            link_text = anchor_text or absolute_url
+            anchor.replace_with(f"[{link_text}]({absolute_url})")
+
+    # Get body text
+    main_content = soup.find("article") or soup.find("main") or soup.body
+    text_source = main_content if main_content else soup
+    text = text_source.get_text(separator="\n", strip=True)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    text = "\n".join(lines)
+
+    # 3. Navigation links are not prepended to save budget; they are returned in separate structured data.
+
+    original_length = len(text)
+    if original_length > max_text_length:
+        text = text[:max_text_length] + f"\n\n[Content truncated. Total length: {original_length} characters]"
 
     return text, unique_links, unique_navigation_links
 
