@@ -111,7 +111,7 @@ class BrowserManager:
         url: str,
         extract_content: bool = True,
         take_screenshot: bool = False,
-        scroll_page: bool = True,
+        scroll_page: bool = False,
         wait_for: Optional[str] = None,
         max_text_length: int = 8000,
     ) -> Dict[str, Any]:

@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     app_title: str = "Agentic Web AI"
     playwright_headed: bool = True
     tavily_api_key: str | None = None
+    save_screenshots_local: bool = False
 
 
 settings = Settings()

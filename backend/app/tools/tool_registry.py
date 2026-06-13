@@ -6,10 +6,12 @@ from typing import Any, Awaitable, Callable, Dict, List
 from app.tools.browser_tools import browse_web
 from app.tools.search_tools import search_web
 from app.tools.extraction_tools import extract_data
-from app.tools.navigation_tools import navigate_page
+from app.tools.navigation_tools import navigate_page, get_current_url, go_back
 from app.tools.finish_tool import finish_task
 from app.tools.click_tools import click_element
 from app.tools.fill_tools import fill_form_field
+from app.tools.scroll_tools import scroll
+from app.tools.screenshot_tools import take_screenshot
 
 logger = logging.getLogger(__name__)
 
@@ -191,9 +193,59 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
                     "required": ["field_description", "value"],
                 },
             },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "scroll",
+                "description": "Scroll the current page up or down. Use this when the answer might be further down the page.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "direction": {
+                            "type": "string",
+                            "enum": ["up", "down"],
+                            "description": "Direction to scroll"
+                        }
+                    },
+                    "required": []
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_url",
+                "description": "Get the current URL of the active browser page. Use this to verify you navigated to the correct page.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "go_back",
+                "description": "Go back to the previous page in the browser history. Use this to recover from incorrect navigations.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "take_screenshot",
+                "description": "Capture a screenshot of the current page. Use this when you want to visually record the state of the page.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
         }
     ]
-
 
 TOOL_REGISTRY: Dict[str, ToolHandler] = {
     "browse_web": browse_web,
@@ -203,6 +255,10 @@ TOOL_REGISTRY: Dict[str, ToolHandler] = {
     "finish_task": finish_task,
     "click_element": click_element,
     "fill_form_field": fill_form_field,
+    "scroll": scroll,
+    "get_current_url": get_current_url,
+    "go_back": go_back,
+    "take_screenshot": take_screenshot,
 }
 
 

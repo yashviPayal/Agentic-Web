@@ -285,7 +285,6 @@ async def navigate_page(intent: str, max_depth: int = 5) -> Dict[str, Any]:
 
     try:
         response = await navigate(page, target_url)
-        await scroll_to_bottom(page)
 
         title = await page.title()
         html_content = await page.content()
@@ -312,3 +311,56 @@ async def navigate_page(intent: str, max_depth: int = 5) -> Dict[str, Any]:
             "success": False,
             "error": f"Failed navigating to {target_url}: {str(e)}"
         }
+
+async def get_current_url() -> Dict[str, Any]:
+    """
+    Get the current URL of the active browser page.
+    """
+    page = browser_manager.current_page
+    if not page or page.is_closed():
+        return {
+            "success": False,
+            "error": "No active browser session. Call browse_web first."
+        }
+    
+    return {
+        "success": True,
+        "url": page.url,
+        "message": f"Current URL is {page.url}"
+    }
+
+async def go_back() -> Dict[str, Any]:
+    """
+    Go back to the previous page in the browser history.
+    """
+    page = browser_manager.current_page
+    if not page or page.is_closed():
+        return {
+            "success": False,
+            "error": "No active browser session. Call browse_web first."
+        }
+        
+    try:
+        response = await page.go_back(wait_until="domcontentloaded", timeout=15000)
+        if not response:
+            return {"success": False, "error": "No previous page in history to go back to."}
+            
+        title = await page.title()
+        html_content = await page.content()
+        
+        content, links, nav_links = extract_clean_content(
+            html_content, base_url=page.url, max_text_length=8000
+        )
+        
+        return {
+            "success": True,
+            "message": "Successfully navigated back.",
+            "url": page.url,
+            "title": title,
+            "content": content,
+            "links": links,
+            "navigation_links": nav_links,
+        }
+    except Exception as e:
+        logger.error(f"Failed to go back: {e}")
+        return {"success": False, "error": f"Failed to go back: {str(e)}"}

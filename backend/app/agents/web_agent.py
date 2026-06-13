@@ -189,6 +189,7 @@ class AIAgent:
                 tools=self.tools,
                 tool_choice="auto" if step < max_steps else "none",
                 max_tokens=2000,
+                temperature=0.0,
             )
 
             message = response.choices[0].message
