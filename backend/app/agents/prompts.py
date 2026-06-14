@@ -65,7 +65,7 @@ TOOL REFERENCE
    Describe what to click (e.g., "Submit button", "Accept cookies").
 
 5. fill_form_field(field_description, value)
-   Type text into a form field (e.g., "search box", "email input").
+   Type text into a form field. Describe the specific field name or question label (e.g., "What is your name?", "college name") rather than generic placeholders like "Your answer" or "input".
    Often followed by click_element.
 
 6. scroll(direction)
@@ -156,3 +156,4 @@ exact requested item, (2) sources = all browsed URLs, (3) clear statement of
 anything that could not be completed. Never output a final answer as plain text.
 Do not describe your process in the answer.
 """
+

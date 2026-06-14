@@ -183,7 +183,7 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
                     "properties": {
                         "field_description": {
                             "type": "string",
-                            "description": "Describe the field (e.g. 'search box', 'email input')",
+                            "description": "Describe the specific field name or question label (e.g., 'What is your name?', 'college name') rather than generic placeholders like 'Your answer' or 'input'.",
                         },
                         "value": {
                             "type": "string",

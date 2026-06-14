@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     playwright_headed: bool = True
     tavily_api_key: str | None = None
     save_screenshots_local: bool = False
+    nemotron_nvidia: str | None = None
 
 
 settings = Settings()

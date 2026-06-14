@@ -99,17 +99,59 @@ async def click_element(intent: str) -> Dict[str, Any]:
         await page.wait_for_load_state("domcontentloaded", timeout=8000)
         await scroll_to_bottom(page)
 
+        # Check for validation/required field errors on the page after clicking
+        validation_errors = await page.evaluate("""
+            () => {
+                const errors = [];
+                document.querySelectorAll(':invalid').forEach(el => {
+                    if (el.validationMessage) {
+                        errors.push(el.validationMessage);
+                    }
+                });
+                document.querySelectorAll('[aria-invalid="true"]').forEach(el => {
+                    let errorText = "Invalid field";
+                    const parent = el.closest('[role="listitem"], .Qr7Oae, .M7eCdd');
+                    if (parent) {
+                        const heading = parent.querySelector('[role="heading"], label, legend');
+                        if (heading && heading.textContent.trim()) {
+                            errorText = `Field "${heading.textContent.trim()}" is invalid/required`;
+                        } else {
+                            errorText = `Field "${parent.textContent.trim().slice(0, 50)}..." is invalid/required`;
+                        }
+                    }
+                    if (!errors.includes(errorText)) {
+                        errors.push(errorText);
+                    }
+                });
+                const errorSelectors = ['[role="alert"]', '.errorMessage', '.error-message', '.validation-error', '.R9Z5ct'];
+                for (const sel of errorSelectors) {
+                    document.querySelectorAll(sel).forEach(el => {
+                        const text = el.textContent.trim();
+                        if (text && !errors.includes(text)) {
+                            errors.push(text);
+                        }
+                    });
+                }
+                return errors;
+            }
+        """)
+
         title = await page.title()
         html_content = await page.content()
         content, links, nav_links = extract_clean_content(
             html_content, base_url=page.url, max_text_length=8000
         )
 
+        message = f"Clicked '{target_text}' successfully."
+        if validation_errors:
+            err_str = "; ".join(validation_errors)
+            message += f" WARNING: Form validation/required field error(s) detected on page: '{err_str}'. The submission or action may have failed. Please check the fields and make sure they are filled correctly."
+
         return {
             "success": True,
             "url": page.url,
             "title": title,
-            "message": f"Clicked '{target_text}' successfully.",
+            "message": message,
             "content": content,
             "links": links,
             "navigation_links": nav_links,
