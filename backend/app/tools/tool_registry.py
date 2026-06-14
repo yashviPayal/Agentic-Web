@@ -10,6 +10,8 @@ from app.tools.navigation_tools import navigate_page, get_current_url, go_back
 from app.tools.finish_tool import finish_task
 from app.tools.click_tools import click_element
 from app.tools.fill_tools import fill_form_field
+from app.tools.form_inspect_tools import read_form_fields
+from app.tools.select_tools import select_form_option
 from app.tools.scroll_tools import scroll
 from app.tools.screenshot_tools import take_screenshot
 
@@ -197,6 +199,49 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "read_form_fields",
+                "description": (
+                    "Scan the current page and return every form question with its type "
+                    "(text / radio_or_rating / checkbox) and available options. "
+                    "ALWAYS call this FIRST when asked to fill out a form, before calling "
+                    "fill_form_field or select_form_option."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "select_form_option",
+                "description": (
+                    "Select a radio button, checkbox, linear-scale, star/rating, or dropdown option. "
+                    "question = the exact question text from read_form_fields. "
+                    "option = the exact option label to select (e.g. '1', 'Instagram', '5'). "
+                    "For checkbox questions needing multiple answers, call this once per option. "
+                    "NEVER use fill_form_field for radio buttons, checkboxes, scales, or ratings."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "description": "The question text this option belongs to"
+                        },
+                        "option": {
+                            "type": "string",
+                            "description": "The exact option label to select"
+                        }
+                    },
+                    "required": ["question", "option"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "scroll",
                 "description": "Scroll the current page up or down. Use this when the answer might be further down the page.",
                 "parameters": {
@@ -255,6 +300,8 @@ TOOL_REGISTRY: Dict[str, ToolHandler] = {
     "finish_task": finish_task,
     "click_element": click_element,
     "fill_form_field": fill_form_field,
+    "read_form_fields": read_form_fields,
+    "select_form_option": select_form_option,
     "scroll": scroll,
     "get_current_url": get_current_url,
     "go_back": go_back,
