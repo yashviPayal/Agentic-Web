@@ -1,0 +1,368 @@
+import asyncio
+import inspect
+import logging
+from typing import Any, Awaitable, Callable, Dict, List
+
+from app.tools.browser_tools import browse_web
+from app.tools.search_tools import search_web
+from app.tools.extraction_tools import extract_data
+from app.tools.navigation_tools import navigate_page, get_current_url, go_back
+from app.tools.finish_tool import finish_task
+from app.tools.click_tools import click_element
+from app.tools.fill_tools import fill_form_field
+from app.tools.form_inspect_tools import read_form_fields
+from app.tools.select_tools import select_form_option
+from app.tools.scroll_tools import scroll
+from app.tools.screenshot_tools import take_screenshot
+from app.tools.human_tools import request_human_input
+
+logger = logging.getLogger(__name__)
+
+
+ToolHandler = Callable[..., Awaitable[Dict[str, Any]]]
+
+
+def get_tool_definitions() -> List[Dict[str, Any]]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "browse_web",
+                "description": (
+                    "Browse a website and extract its content. Use this when the user "
+                    "asks about a specific website, wants to read a webpage, or needs "
+                    "information from a URL."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "The full URL to browse, including http:// or https://",
+                        },
+                        "extract_content": {
+                            "type": "boolean",
+                            "description": "Whether to extract the main text content",
+                            "default": True,
+                        },
+                        "scroll_page": {
+                            "type": "boolean",
+                            "description": "Whether to scroll the page to load lazy content",
+                            "default": True,
+                        },
+                    },
+                    "required": ["url"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_web",
+                "description": "Search the internet for current, real-time, recent, product, pricing, company,news, release, availability and factual information.Always use this tool when the user asks about current prices, current events, recent releases, product availability,or information that may have changed.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query to look up on the web"
+                        },
+                        "count": {
+                            "type": "integer",
+                            "description": "The number of search results to return",
+                            "default": 5
+                        }
+                    },
+                    "required": ["query"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "extract_data",
+                "description": (
+                    "Extract specific data fields from a webpage's raw HTML or content. "
+                    "Use this tool when you need structured fields like price, description, "
+                    "date, or specific values from a webpage."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "fields": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "description": "The list of field names/descriptions to extract (e.g. ['price', 'product name'])",
+                        },
+                    },
+                    "required": ["fields"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "navigate_page",
+                "description": (
+                    "Statefully navigate to a new page or sub-page matching a specific intent. "
+                    "Use this tool to click links, open products, go to next pages, or click tabs. "
+                    "IMPORTANT: For GitHub profiles, use intent like 'go to stars tab' or "
+                    "'navigate to ?tab=stars'. Tab links often use URL query parameters."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "intent": {
+                            "type": "string",
+                            "description": "The target navigation goal (e.g., 'click the first search result product', 'go to page 2', 'click on specifications tab')",
+                        },
+                    },
+                    "required": ["intent"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "finish_task",
+                "description": (
+                    "Submit the final answer and terminate the task. "
+                    "Use this ONLY when you have gathered all necessary information and are ready "
+                    "to provide the final complete answer to the user. "
+                    "You must NOT produce a final answer as plain text without calling this tool."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "answer": {
+                            "type": "string",
+                            "description": "The final complete and detailed answer to the user's query.",
+                        },
+                        "sources": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
+                            "description": "The list of absolute source URLs (e.g. websites browsed) used to gather information for this answer. Mandatory if the task required web lookup.",
+                        },
+                    },
+                    "required": ["answer"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "click_element",
+                "description": (
+                    "Click a button or interactive element on the current page. "
+                    "Use this for buttons that don't have links — like 'Submit', 'Search', "
+                    "'Load More', 'Accept', dropdowns, or any clickable UI element."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "intent": {
+                            "type": "string",
+                            "description": "Describe what you want to click (e.g. 'Search button', 'Accept cookies', 'Load more results')",
+                        }
+                    },
+                    "required": ["intent"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "fill_form_field",
+                "description": (
+                    "Type text into a form field on the current page. "
+                    "Use this to fill search boxes, login fields, contact forms, etc."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "field_description": {
+                            "type": "string",
+                            "description": "Describe the specific field name or question label (e.g., 'What is your name?', 'college name') rather than generic placeholders like 'Your answer' or 'input'.",
+                        },
+                        "value": {
+                            "type": "string",
+                            "description": "The text to type into the field",
+                        },
+                    },
+                    "required": ["field_description", "value"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_form_fields",
+                "description": (
+                    "Scan the current page and return every form question with its type "
+                    "(text / radio_or_rating / checkbox) and available options. "
+                    "ALWAYS call this FIRST when asked to fill out a form, before calling "
+                    "fill_form_field or select_form_option."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "select_form_option",
+                "description": (
+                    "Select a radio button, checkbox, linear-scale, star/rating, or dropdown option. "
+                    "question = the exact question text from read_form_fields. "
+                    "option = the exact option label to select (e.g. '1', 'Instagram', '5'). "
+                    "For checkbox questions needing multiple answers, call this once per option. "
+                    "NEVER use fill_form_field for radio buttons, checkboxes, scales, or ratings."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "description": "The question text this option belongs to"
+                        },
+                        "option": {
+                            "type": "string",
+                            "description": "The exact option label to select"
+                        }
+                    },
+                    "required": ["question", "option"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "scroll",
+                "description": "Scroll the current page up or down. Use this when the answer might be further down the page.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "direction": {
+                            "type": "string",
+                            "enum": ["up", "down"],
+                            "description": "Direction to scroll"
+                        }
+                    },
+                    "required": []
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_url",
+                "description": "Get the current URL of the active browser page. Use this to verify you navigated to the correct page.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "go_back",
+                "description": "Go back to the previous page in the browser history. Use this to recover from incorrect navigations.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "take_screenshot",
+                "description": "Capture a screenshot of the current page. Use this when you want to visually record the state of the page.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "request_human_input",
+                "description": (
+                    "Pause the agent execution and request assistance, input, or an authentication action "
+                    "(like logging in, solving MFA/2FA, or solving a captcha) from the human. "
+                    "Use this tool when you hit a login screen, credentials/auth page, captcha, or need guidance. "
+                    "Do NOT try to guess credentials or solve captchas yourself."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": {
+                            "type": "string",
+                            "description": "The message to show the human explaining what they need to do (e.g. 'Please log in to GitHub on the browser screen' or 'Please solve the captcha on screen').",
+                        }
+                    },
+                    "required": ["prompt"],
+                },
+            },
+        }
+    ]
+
+TOOL_REGISTRY: Dict[str, ToolHandler] = {
+    "browse_web": browse_web,
+    "search_web": search_web,
+    "extract_data": extract_data,
+    "navigate_page": navigate_page,
+    "finish_task": finish_task,
+    "click_element": click_element,
+    "fill_form_field": fill_form_field,
+    "read_form_fields": read_form_fields,
+    "select_form_option": select_form_option,
+    "scroll": scroll,
+    "get_current_url": get_current_url,
+    "go_back": go_back,
+    "take_screenshot": take_screenshot,
+    "request_human_input": request_human_input,
+}
+
+
+async def execute_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute a registered tool by name with the given arguments."""
+    try:
+        handler = TOOL_REGISTRY[name]
+    except KeyError as exc:
+        logger.error(f"Unknown tool: {name}")
+        raise ValueError(f"Unknown tool: {name}") from exc
+
+    # Filter arguments to match the handler's signature to prevent TypeError: unexpected keyword argument
+    try:
+        sig = inspect.signature(handler)
+        has_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+        if not has_kwargs:
+            valid_args = {k: v for k, v in arguments.items() if k in sig.parameters}
+        else:
+            valid_args = arguments
+    except Exception as e:
+        logger.warning(f"Failed to inspect signature of tool {name}: {e}")
+        valid_args = arguments
+
+    retries = 3
+    for attempt in range(1, retries + 1):
+        try:
+            result = await handler(**valid_args)
+            return result
+        except Exception as e:
+            logger.warning(f"Tool {name} attempt {attempt} failed: {e}")
+            if attempt < retries:
+                await asyncio.sleep(1.0)
+            else:
+                logger.error(f"Tool {name} failed after {retries} attempts: {e}")
+                return {"success": False, "error": str(e)}
+
