@@ -1,16 +1,35 @@
+from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException
 
 from app.api.schemas import ChatRequest, ChatResponse, ScrapeRequest
 from app.scraper.browser import browser_manager
 from app.services.agent_service import agent_service
+from app.tools.human_tools import human_request, _human_response_queue
 
 
 router = APIRouter()
 
 
+class HumanResponse(BaseModel):
+    answer: str
+
+
 @router.get("/health", tags=["health"])
 async def health():
     return {"status": "ok"}
+
+
+@router.get("/human/status", tags=["human"])
+async def get_human_status():
+    return human_request
+
+
+@router.post("/human/response", tags=["human"])
+async def submit_human_response(response: HumanResponse):
+    if not human_request.get("waiting"):
+        raise HTTPException(status_code=400, detail="Not currently waiting for human input.")
+    await _human_response_queue.put({"answer": response.answer})
+    return {"status": "success"}
 
 
 @router.post("/chat", response_model=ChatResponse, tags=["chat"])

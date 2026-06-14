@@ -1,6 +1,9 @@
 import asyncio
 import logging
+import os
+import re
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
@@ -10,6 +13,31 @@ from app.scraper.screenshot import capture_screenshot_base64
 from app.tools.extraction_tools import extract_clean_content
 
 logger = logging.getLogger(__name__)
+
+SESSIONS_DIR = ".sessions"
+os.makedirs(SESSIONS_DIR, exist_ok=True)
+
+def get_session_path(url: Optional[str]) -> Optional[str]:
+    if not url:
+        return None
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        if not domain:
+            if not url.startswith(("http://", "https://")):
+                parsed = urlparse("https://" + url)
+                domain = parsed.netloc.lower()
+            else:
+                return None
+        domain = domain.split(":")[0]
+        if domain.startswith("www."):
+            domain = domain[4:]
+        if not domain:
+            return None
+        clean_name = re.sub(r"[^a-z0-9.]", "_", domain)
+        return os.path.join(SESSIONS_DIR, f"{clean_name}.json")
+    except Exception:
+        return None
 
 
 class BrowserManager:
@@ -25,6 +53,16 @@ class BrowserManager:
         if not self._browser and not self._playwright:
             logger.info("Browser is already closed or not initialized.")
             return
+
+        if self.current_context and self.current_page:
+            try:
+                url = self.current_page.url
+                session_path = get_session_path(url)
+                if session_path:
+                    logger.info(f"Saving browser storage state to {session_path}")
+                    await self.current_context.storage_state(path=session_path)
+            except Exception as e:
+                logger.warning(f"Could not save storage state: {e}")
 
         if self._browser:
             try:
@@ -72,7 +110,7 @@ class BrowserManager:
             logger.info(f"Browser ({engine}) launched. Headless: {headless}")
             return self._browser
 
-    async def new_context(self, user_agent: Optional[str] = None) -> BrowserContext:
+    async def new_context(self, user_agent: Optional[str] = None, url: Optional[str] = None) -> BrowserContext:
         """Create isolated browser context with anti-bot measures."""
         if not self._browser or not self._browser.is_connected():
             await self.start(headless=not self._headed if self._browser else None)
@@ -84,6 +122,11 @@ class BrowserManager:
         }
         if user_agent:
             context_options["user_agent"] = user_agent
+
+        session_path = get_session_path(url)
+        if session_path and os.path.exists(session_path):
+            logger.info(f"Loading storage state from {session_path}")
+            context_options["storage_state"] = session_path
 
         try:
             context = await self._browser.new_context(**context_options)
@@ -136,7 +179,7 @@ class BrowserManager:
         for attempt in range(retries + 1):
             context = None
             try:
-                context = await self.new_context()
+                context = await self.new_context(url=url)
                 page = await self.new_page(context)
 
                 response = await navigate(page, url)

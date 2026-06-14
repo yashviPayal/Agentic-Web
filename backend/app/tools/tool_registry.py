@@ -14,6 +14,7 @@ from app.tools.form_inspect_tools import read_form_fields
 from app.tools.select_tools import select_form_option
 from app.tools.scroll_tools import scroll
 from app.tools.screenshot_tools import take_screenshot
+from app.tools.human_tools import request_human_input
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +290,28 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
                     "properties": {}
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "request_human_input",
+                "description": (
+                    "Pause the agent execution and request assistance, input, or an authentication action "
+                    "(like logging in, solving MFA/2FA, or solving a captcha) from the human. "
+                    "Use this tool when you hit a login screen, credentials/auth page, captcha, or need guidance. "
+                    "Do NOT try to guess credentials or solve captchas yourself."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": {
+                            "type": "string",
+                            "description": "The message to show the human explaining what they need to do (e.g. 'Please log in to GitHub on the browser screen' or 'Please solve the captcha on screen').",
+                        }
+                    },
+                    "required": ["prompt"],
+                },
+            },
         }
     ]
 
@@ -306,6 +329,7 @@ TOOL_REGISTRY: Dict[str, ToolHandler] = {
     "get_current_url": get_current_url,
     "go_back": go_back,
     "take_screenshot": take_screenshot,
+    "request_human_input": request_human_input,
 }
 
 
